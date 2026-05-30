@@ -1,8 +1,7 @@
 ; ============================================================
 ;  Sudoku solver  --  16-bit MASM (DOS / real mode)
-;  Recursive backtracking, exactly the algorithm we walked through:
-;    find an empty cell -> try 1..9 that don't conflict ->
-;    place & recurse -> on dead end, erase (undo) and back up.
+;  Solves THREE boards. Clears the screen and waits for a key
+;  between puzzles so each fits on the 80x25 screen.
 ;  Assemble with MASM/ML 6.x or TASM; run under DOSBox.
 ; ============================================================
 
@@ -10,35 +9,47 @@
 .STACK 1000h
 
 .DATA
-; The board is 81 bytes, row-major. 0 = empty.
-; This is the classic puzzle (has a single unique solution).
-board   db 5,3,0, 0,7,0, 0,0,0
-        db 6,0,0, 1,9,5, 0,0,0
-        db 0,9,8, 0,0,0, 0,6,0
-        db 8,0,0, 0,6,0, 0,0,3
-        db 4,0,0, 8,0,3, 0,0,1
-        db 7,0,0, 0,2,0, 0,0,6
-        db 0,6,0, 0,0,0, 2,8,0
-        db 0,0,0, 4,1,9, 0,0,5
-        db 0,0,0, 0,8,0, 0,7,9
+board    db 81 dup(0)          ; working grid the solver operates on
 
-; Scratch used only inside isValid. Safe as globals because
-; isValid never recurses and always returns before solve recurses.
-vDigit  db 0
-vRow    db 0
-vCol    db 0
-vBR     db 0          ; box row start
-vBC     db 0          ; box col start
+puzzle1  db 5,3,0, 0,7,0, 0,0,0
+         db 6,0,0, 1,9,5, 0,0,0
+         db 0,9,8, 0,0,0, 0,6,0
+         db 8,0,0, 0,6,0, 0,0,3
+         db 4,0,0, 8,0,3, 0,0,1
+         db 7,0,0, 0,2,0, 0,0,6
+         db 0,6,0, 0,0,0, 2,8,0
+         db 0,0,0, 4,1,9, 0,0,5
+         db 0,0,0, 0,8,0, 0,7,9
 
-okMsg   db 13,10,'Solved:',13,10,13,10,'$'
-noMsg   db 13,10,'No solution.',13,10,'$'
+puzzle2  db 0,0,3, 0,2,0, 6,0,0
+         db 9,0,0, 3,0,5, 0,0,1
+         db 0,0,1, 8,0,6, 4,0,0
+         db 0,0,8, 1,0,2, 9,0,0
+         db 7,0,0, 0,0,0, 0,0,8
+         db 0,0,6, 7,0,8, 2,0,0
+         db 0,0,2, 6,0,9, 5,0,0
+         db 8,0,0, 2,0,3, 0,0,9
+         db 0,0,5, 0,1,0, 3,0,0
+
+ptrTbl   dw puzzle1, puzzle2
+pIdx     dw 0
+
+vDigit   db 0
+vRow     db 0
+vCol     db 0
+vBR      db 0
+vBC      db 0
+
+hdr      db '--- Puzzle ','$'
+tail     db ' ---',13,10,13,10,'$'
+noMsg    db 13,10,'No solution.',13,10,'$'
+prompt   db 13,10,'Press any key for the next puzzle...','$'
 
 .CODE
 
 ; ------------------------------------------------------------
 ;  isValid:  BX = cell index (0..80), AL = digit (1..9)
-;  Returns:  AL = 1 if the digit may be placed, else AL = 0
-;  Preserves BX, CX, DX, SI
+;  Returns AL = 1 if legal, else 0.  Preserves BX,CX,DX,SI.
 ; ------------------------------------------------------------
 isValid PROC
         push bx
@@ -49,14 +60,13 @@ isValid PROC
         mov  vDigit, al
         mov  ax, bx
         mov  cl, 9
-        div  cl                 ; AL = row (cell/9), AH = col (cell mod 9)
+        div  cl                 ; AL = row, AH = col
         mov  vRow, al
         mov  vCol, ah
 
-        ; --- row scan: indices row*9 .. row*9+8 ---
-        mov  al, vRow
+        mov  al, vRow           ; row scan
         mov  bl, 9
-        mul  bl                 ; AX = row*9
+        mul  bl
         mov  si, ax
         mov  cx, 9
 rowLp:  mov  al, board[si]
@@ -65,8 +75,7 @@ rowLp:  mov  al, board[si]
         inc  si
         loop rowLp
 
-        ; --- column scan: indices col, col+9, col+18, ... ---
-        mov  al, vCol
+        mov  al, vCol           ; column scan
         xor  ah, ah
         mov  si, ax
         mov  cx, 9
@@ -76,8 +85,7 @@ colLp:  mov  al, board[si]
         add  si, 9
         loop colLp
 
-        ; --- 3x3 box scan ---
-        mov  al, vRow           ; boxRowStart = (row/3)*3
+        mov  al, vRow           ; 3x3 box scan
         xor  ah, ah
         mov  bl, 3
         div  bl
@@ -85,7 +93,7 @@ colLp:  mov  al, board[si]
         mov  bl, 3
         mul  bl
         mov  vBR, al
-        mov  al, vCol           ; boxColStart = (col/3)*3
+        mov  al, vCol
         xor  ah, ah
         mov  bl, 3
         div  bl
@@ -93,15 +101,15 @@ colLp:  mov  al, board[si]
         mov  bl, 3
         mul  bl
         mov  vBC, al
-        mov  al, vBR            ; base index = boxRowStart*9 + boxColStart
+        mov  al, vBR
         mov  bl, 9
         mul  bl
         mov  bl, vBC
         xor  bh, bh
         add  ax, bx
         mov  si, ax
-        mov  dl, 3              ; 3 rows in the box
-boxRow: mov  cx, 3             ; 3 cols in the box
+        mov  dl, 3
+boxRow: mov  cx, 3
         push si
 boxCol: mov  al, board[si]
         cmp  al, vDigit
@@ -109,11 +117,11 @@ boxCol: mov  al, board[si]
         inc  si
         loop boxCol
         pop  si
-        add  si, 9             ; drop to next row of the same box
+        add  si, 9
         dec  dl
         jnz  boxRow
 
-        mov  al, 1             ; passed row, col and box -> legal
+        mov  al, 1
         jmp  ivDone
 boxBad: pop  si
 ivBad:  xor  al, al
@@ -125,17 +133,15 @@ ivDone: pop  si
 isValid ENDP
 
 ; ------------------------------------------------------------
-;  solve:  recursive backtracking driver
-;  Returns AL = 1 if the board is fully solved, else AL = 0
-;  Preserves SI, CX, BX, so the caller's loop state (the empty
-;  cell and the digit it is trying) survives the recursive call.
+;  solve:  recursive backtracking. Returns AL=1 if solved.
+;  Preserves SI,CX,BX so loop state survives the recursion.
 ; ------------------------------------------------------------
 solve   PROC
         push si
         push cx
         push bx
 
-        xor  si, si            ; scan for the first empty cell
+        xor  si, si
 findE:  cmp  si, 81
         jae  allFull
         cmp  byte ptr board[si], 0
@@ -143,9 +149,9 @@ findE:  cmp  si, 81
         inc  si
         jmp  findE
 allFull:
-        mov  al, 1             ; no empty cells left -> solved
+        mov  al, 1
         jmp  sDone
-cellE:  mov  cl, 1             ; try digits 1..9 in this cell
+cellE:  mov  cl, 1
 tryD:   cmp  cl, 9
         ja   sFail
         mov  bx, si
@@ -153,15 +159,15 @@ tryD:   cmp  cl, 9
         call isValid
         or   al, al
         jz   nextD
-        mov  al, cl            ; legal -> place it
+        mov  al, cl
         mov  board[si], al
-        call solve             ; recurse to fill the rest
+        call solve
         or   al, al
-        jnz  sOk               ; deeper search succeeded -> keep it
-        mov  byte ptr board[si], 0   ; dead end -> erase (undo)
+        jnz  sOk
+        mov  byte ptr board[si], 0
 nextD:  inc  cl
         jmp  tryD
-sFail:  xor  al, al           ; no digit worked -> fail, back up
+sFail:  xor  al, al
         jmp  sDone
 sOk:    mov  al, 1
 sDone:  pop  bx
@@ -171,46 +177,112 @@ sDone:  pop  bx
 solve   ENDP
 
 ; ------------------------------------------------------------
-main    PROC
-        mov  ax, @data
-        mov  ds, ax
+;  copyPuzzle:  copy puzzle[pIdx] into board.  Needs ES = DS.
+; ------------------------------------------------------------
+copyPuzzle PROC
+        push si
+        push di
+        push cx
+        mov  bx, pIdx
+        shl  bx, 1
+        mov  si, ptrTbl[bx]
+        mov  di, OFFSET board
+        mov  cx, 81
+        cld
+        rep  movsb
+        pop  cx
+        pop  di
+        pop  si
+        ret
+copyPuzzle ENDP
 
-        call solve
-        or   al, al
-        jz   showNo
+; ------------------------------------------------------------
+;  clrScreen:  reset to text mode 80x25, which clears it and
+;  homes the cursor (so each puzzle starts at the top).
+; ------------------------------------------------------------
+clrScreen PROC
+        mov  ax, 0003h         ; AH=00 set mode, AL=03 = 80x25 color text
+        int  10h
+        ret
+clrScreen ENDP
 
-        mov  dx, OFFSET okMsg  ; print "Solved:" header
-        mov  ah, 09h
-        int  21h
-
-        xor  si, si            ; print the 9x9 grid
-pLoop:  cmp  si, 81
-        jae  pEnd
+; ------------------------------------------------------------
+;  printGrid:  print the working board as a spaced 9x9 grid.
+; ------------------------------------------------------------
+printGrid PROC
+        xor  si, si
+pgLoop: cmp  si, 81
+        jae  pgEnd
         mov  dl, board[si]
         add  dl, '0'
         mov  ah, 02h
         int  21h
-        mov  dl, ' '           ; space between numbers
+        mov  dl, ' '
         mov  ah, 02h
         int  21h
         inc  si
-        mov  ax, si            ; newline after every 9 cells
+        mov  ax, si
         mov  bl, 9
-        div  bl                ; AH = si mod 9
+        div  bl
         cmp  ah, 0
-        jne  pLoop
+        jne  pgLoop
         mov  dl, 13
         mov  ah, 02h
         int  21h
         mov  dl, 10
         mov  ah, 02h
         int  21h
-        jmp  pLoop
+        jmp  pgLoop
+pgEnd:  ret
+printGrid ENDP
 
-showNo: mov  dx, OFFSET noMsg
+; ------------------------------------------------------------
+main    PROC
+        mov  ax, @data
+        mov  ds, ax
+        mov  es, ax
+
+        mov  word ptr pIdx, 0
+nextPuz:
+        cmp  word ptr pIdx, 2
+        jae  allDone
+
+        call clrScreen         ; fresh screen for this puzzle
+
+        mov  dx, OFFSET hdr     ; "--- Puzzle N ---"
         mov  ah, 09h
         int  21h
-pEnd:   mov  ax, 4C00h         ; return to DOS
+        mov  ax, pIdx
+        add  al, '1'
+        mov  dl, al
+        mov  ah, 02h
+        int  21h
+        mov  dx, OFFSET tail
+        mov  ah, 09h
+        int  21h
+
+        call copyPuzzle
+        call solve
+        or   al, al
+        jz   pNo
+        call printGrid
+        jmp  pAfter
+pNo:    mov  dx, OFFSET noMsg
+        mov  ah, 09h
+        int  21h
+
+pAfter: ; pause for a key (so the screen isn't wiped before you read it)
+        mov  dx, OFFSET prompt
+        mov  ah, 09h
+        int  21h
+        mov  ah, 08h           ; read one key, no echo
+        int  21h
+
+        inc  word ptr pIdx
+        jmp  nextPuz
+
+allDone:
+        mov  ax, 4C00h
         int  21h
 main    ENDP
         END  main
